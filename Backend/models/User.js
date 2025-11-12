@@ -6,12 +6,17 @@ const userSchema = new mongoose.Schema(
     email: { type: String, required: true, unique: true },
     password: { type: String, required: true },
     phone: { type: String },
-    address:{type:String},
-    image: { type: String,},
+    role: {
+      type: String,
+      enum: ["user", "donor", "volunteer", "admin"],
+      default: "user",
+    },
+    address: { type: String },
+    image: { type: String },
     donated: [
       {
         foodItemId: { type: mongoose.Schema.Types.ObjectId, ref: "FoodItem" }, // Reference to claimed food item
-         // Timestamp when claimed
+        // Timestamp when claimed
       },
     ], // List of donated food items
     claimed: [

@@ -1,206 +1,184 @@
-<!--
-  Professional README for the FoodShare project
-  Generated/updated by an automated assistant. Edit sections marked TODO where you want
-  project-specific or sensitive information (licenses, production deploy keys, etc.).
--->
-
 # FoodShare
 
-FoodShare is a real-time food donation web platform that connects donors (restaurants, individuals, NGOs) with recipients in need. It uses live location data and notifications to make distribution efficient and safe.
+FoodShare is a real-time food donation platform that connects donors (individuals, restaurants, or NGOs) with volunteers who pick up and deliver donations to people in need. The app includes realtime notifications (Socket.IO), JWT authentication, and a small volunteer workflow (accept, pickup, in-transit, delivered).
 
-This README provides a developer-oriented setup guide, environment details, running instructions, and helpful troubleshooting tips.
+This README is tailored for developers working locally: how to run, what environment variables are required, and common troubleshooting steps.
 
-## Contents
+## Quick links
 
-- [FoodShare](#foodshare)
-  - [Contents](#contents)
-  - [Demo / Purpose](#demo--purpose)
-  - [Tech stack](#tech-stack)
-  - [Repository structure (key files)](#repository-structure-key-files)
-  - [Prerequisites](#prerequisites)
-  - [Local setup (quick)](#local-setup-quick)
-  - [Environment variables](#environment-variables)
-  - [Run instructions (dev)](#run-instructions-dev)
-  - [Testing SMTP (email)](#testing-smtp-email)
-  - [Troubleshooting](#troubleshooting)
-  - [Developer notes \& recent changes](#developer-notes--recent-changes)
-  - [Security notes](#security-notes)
-  - [Suggested next steps](#suggested-next-steps)
-- [React + Vite](#react--vite)
-  - [Expanding the ESLint configuration](#expanding-the-eslint-configuration)
+- Frontend: `Frontend/` (React + Vite)
+- Backend: `Backend/` (Express + Mongoose + Socket.IO)
 
-## Demo / Purpose
+## What’s included (high level)
 
-FoodShare helps rescue surplus food and deliver it to people who need it. Donors post available food with quantity and location, and claimers can request pickup. The platform aims to reduce food waste and fight hunger.
+- Realtime notifications using Socket.IO (server: `Backend/server.js`, client: `Frontend/src/components/VolunteerNotifications.jsx`).
+- Role-based users (`User.role` includes `user`, `donor`, `volunteer`, `admin`).
+- Atomic claim flow for donations (first volunteer to claim wins) in `Backend/controllers/foodController.js`.
+- Persisted recent notifications with TTL (so volunteers reconnecting can fetch missed alerts).
 
-## Tech stack
+## Key features
 
-- Frontend: React (Vite), Redux, Lucide icons
-- Backend: Node.js, Express
-- Database: MongoDB (mongoose)
-- Auth: JWT
-- Email: Nodemailer (SMTP) — recommended to use transactional provider in production (SendGrid / Mailgun / SES)
-- Maps: Google Maps API
+The project implements the following key features (detailed):
 
-## Repository structure (key files)
+- Realtime notifications (Socket.IO)
+  - Backend emits `new_donation` when a donor posts a donation; volunteers connected via Socket.IO receive the event immediately.
+  - Persisted `Notification` documents (TTL, ~24h) allow the server to re-send `missed_notifications` on reconnect for donations that still exist.
+  - Socket events used by the app: `new_donation`, `donation_claimed`, `status_update`, `missed_notifications`.
+  - Server-side socket file: `Backend/server.js`. Client-side entry: `Frontend/src/components/VolunteerNotifications.jsx`.
 
-Top-level folders:
+- Volunteer workflow & role-aware UI
+  - Users have roles (`user`, `donor`, `volunteer`, `admin`) stored in the JWT. The frontend gates UI and routes based on this claim.
+  - Volunteer-specific UX: a notification bell with unread badge, a volunteer dashboard, a tasks list, and an in-app notification panel for live claims.
+  - Files: `Frontend/src/page/VolunteerDashboard.jsx`, `Frontend/src/page/VolunteerTasks.jsx`, `Frontend/src/components/VolunteerNotifications.jsx`, and `Frontend/src/components/Navbar.jsx`.
 
-- `Frontend/` — React app (Vite). Entry: `src/main.jsx` and `index.html`.
-- `Backend/` — Express server. Entry: `server.js`.
+- Atomic claim flow (first-come wins)
+  - Claims are processed atomically server-side (find-and-update or equivalent) in `Backend/controllers/foodController.js` so only one volunteer can claim a donation.
+  - On success: a `ClaimedFood` document is created, the original `Food` (donation) is removed, related `Notification` docs are cleaned up, and `donation_claimed` is emitted to other volunteers.
 
-Important files you might edit:
+- Pickup & delivery lifecycle updates
+  - Volunteers update statuses (PickedUp, InTransit, Delivered) using `PUT /api/food/claimed/:id/status`. The server persists the status and emits `status_update` events to interested clients.
 
-- `Backend/config/db.js` — MongoDB connection logic
-- `Backend/.env.example` — example environment values (keep secrets out of repo)
-- `Backend/test-smtp.js` — small script to verify SMTP credentials locally
-- `Frontend/src/styles/theme.css` — central theme tokens and utilities
-- `Frontend/src/components/UI/Card.jsx` — shared Card component used across pages
+- Geolocation, maps and distance UX
+  - Frontend uses browser geolocation and a Haversine formula to estimate distance between volunteer and donor (see `VolunteerTasks.jsx`).
+  - `AvailableFood.jsx` contains an optional Google Map (via `@react-google-maps/api`) with markers and an InfoWindow showing donor name, address, contact, and an inline Claim button.
+  - Volunteers can open directions in Google Maps via a "View on Map" link that constructs a directions URL using volunteer coordinates and donor coordinates.
+
+- Notification resilience & UI sync
+  - Persisted notifications (TTL) + server-side filtering prevent re-sending alerts for donations that are no longer available.
+  - Frontend syncs an unread count in `sessionStorage.fs_notifications_count` and dispatches a custom event to update the bell badge across tabs.
+
+- Socket rooms & handshake behavior
+  - On connect the server joins sockets to rooms like `volunteer:<id>` and `area:<areaKey>`; this is used to deliver targeted events.
+  - The socket handshake attempts JWT verification (token must include `role`) — this is in `Backend/server.js`. (Note: further hardening is recommended to actively reject unauthenticated sockets.)
+
+- Dev conveniences, CORS & env checks
+  - CORS: middleware allows common localhost variants during development and supports `ALLOWED_ORIGINS` in `Backend/.env`.
+  - Early env validation in `Backend/server.js` provides clear startup failures when `MONGO_URI` or `JWT_SECRET` are missing.
+
+- SMTP & email helper
+  - `Backend/test-smtp.js` is included to help debug email issues. Gmail often requires an App Password or a transactional provider (SendGrid, Mailgun, SES) for production.
+
+- File uploads & image handling
+  - Upload middleware handles donor image uploads (`Backend/middleware/uploadMiddleware.js` + `Backend/uploads/`).
+  - For demo purposes the frontend was updated to force food cards to use a single Unsplash image URL (this was requested to standardize visuals). If you prefer real uploaded images, `AvailableFood.jsx` includes `resolveImageUrl()` logic to map relative `/uploads` paths to the backend base URL.
+
+- Backend & Frontend stacks (quick)
+  - Backend: Node.js + Express + Mongoose (MongoDB) + Socket.IO + Nodemailer. Key files: `Backend/server.js`, `controllers/foodController.js`, `models/Food.js`, `models/Notification.js`.
+  - Frontend: React (Vite) + Redux for auth, axios, `@react-google-maps/api`, react-toastify. Key files: `Frontend/src/page/AvailableFood.jsx`, `Frontend/src/components/VolunteerNotifications.jsx`, `Frontend/src/components/Navbar.jsx`.
+
+- REST endpoints & socket contract (summary)
+  - REST: `POST /api/food/add`, `GET /api/food/available`, `POST /api/food/claim/:id`, `PUT /api/food/claimed/:id/status`, plus auth/profile routes.
+  - Socket events: `new_donation`, `donation_claimed`, `status_update`, `missed_notifications`.
+
+Planned/near-term improvements (not yet fully implemented):
+
+- Geofencing / spatial targeting: replace the crude `area:` room logic with geohash or MongoDB geospatial queries to deliver notifications only to nearby volunteers.
+- Per-user read/unread state for notifications, to avoid re-showing dismissed items after reconnect.
+- Hardened Socket.IO handshake rejection of unauthenticated sockets and role enforcement at connect time.
+
 
 ## Prerequisites
 
-- Node.js (v18+ recommended)
-- npm (or yarn)
-- MongoDB instance (Atlas or local)
-- Google Cloud project with Maps API key (if you need maps)
-
-## Local setup (quick)
-
-1. Clone the repository:
-
-```bash
-git clone <your-repo-url>
-cd FoodShare
-```
-
-2. Backend (install & env):
-
-```bash
-cd Backend
-npm install
-cp .env.example .env    # then edit .env with your values
-```
-
-3. Frontend (install):
-
-```bash
-cd ../Frontend
-npm install
-```
+- Node.js v18+ (recommended)
+- npm or yarn
+- MongoDB (local or Atlas)
+- Optional: Google Maps API key (for location UI)
 
 ## Environment variables
 
-Create `Backend/.env` from `Backend/.env.example` and set the real values. The important keys are:
+Create `Backend/.env` (do NOT commit it). Important variables:
 
-- `MONGO_URI` — MongoDB connection string
-- `JWT_SECRET` — secure random string for JWT signing
-- `GOOGLE_MAPS_API_KEY` — Google Maps API key (used by frontend)
-- `EMAIL_USER` — SMTP username or email-sender (for Nodemailer)
-- `EMAIL_PASS` — SMTP password or app-password / API key (do NOT commit)
-- `PORT` — backend server port (default 5000)
-- `ALLOWED_ORIGINS` — optional comma-separated origins allowed by the backend CORS policy
+- MONGO_URI (required) — e.g. mongodb://localhost:27017/foodshare
+- JWT_SECRET (required) — a long random string for signing JWTs
+- PORT — backend port (default 5000)
+- EMAIL_USER / EMAIL_PASS — SMTP credentials for Nodemailer (optional)
+- ALLOWED_ORIGINS — optional comma separated origins for CORS (dev includes localhost by default)
 
-Frontend environment (Vite) variables should be prefixed with `VITE_` and placed in `.env` at the project root of the Frontend or set in your shell:
+Frontend (Vite) variables live in `Frontend/.env` (or your shell) and must be prefixed with `VITE_`:
 
-- `VITE_REACT_APP_GOOGLE_API` — Google Maps API key for browser
-- `VITE_REACT_APP_API` — Base URL of the backend API (e.g. `http://localhost:5000`)
+- VITE_REACT_APP_API — backend base URL (e.g. http://localhost:5000)
+- VITE_REACT_APP_GOOGLE_API — Google Maps browser key (optional)
 
-## Run instructions (dev)
+Note: Some project scripts may sanitize quotes around Vite values; avoid wrapping values in quotes.
 
-Start the backend:
+## Install & run (local development)
+
+1) Backend
 
 ```bash
 cd Backend
-# start with Node
-node server.js
-
-# or use nodemon (recommended for dev):
-# npm i -g nodemon
-nodemon server.js
+npm install
+# create a Backend/.env using Backend/.env.example and fill values
+npm start
 ```
 
-Start the frontend (Vite):
+If you prefer autoreload during development, install `nodemon` globally and run `nodemon server.js`.
+
+2) Frontend
 
 ```bash
 cd Frontend
+npm install
 npm run dev
 ```
 
-By default:
-- Backend: http://localhost:5000
-- Frontend (Vite): usually http://localhost:5173
+Default ports used during development:
+- Frontend (Vite): http://localhost:5173
+- Backend (API & Socket.IO): http://localhost:5000
 
-If you use cookies or credentials across domains, ensure the backend `ALLOWED_ORIGINS` includes your frontend origin (e.g. `http://localhost:5173`).
+If your frontend cannot connect to Socket.IO (ws://localhost:5000), make sure the backend is running and not crashing on startup. See Troubleshooting below.
 
-## Testing SMTP (email)
+## Developer workflows worth knowing
 
-If you use Gmail, Google commonly rejects simple username/password SMTP connections. Use an App Password (recommended) or an external provider.
+- Real-time flow: when a donor posts a donation (`POST /api/food/add`), backend persists the Food and a `Notification` doc (TTL 24h) and emits a `new_donation` event via Socket.IO. Volunteers connected to Socket.IO receive the event live.
+- Claiming: volunteers hit `POST /api/food/claim/:id` (authenticated). The backend performs an atomic find-and-update to ensure only one volunteer can claim a donation. On success it creates a `ClaimedFood` document and emits `donation_claimed` to remove the alert from other volunteers.
+- Status updates: volunteers update pickup/delivery status with `PUT /api/food/claimed/:id/status` which emits `status_update` events.
 
-Quick local SMTP verification (from `Backend`):
+## Important files & routes
 
-```bash
-# ensure Backend/.env has EMAIL_USER and EMAIL_PASS set
-node test-smtp.js
-```
+- Backend
+  - `server.js` — app bootstrap, CORS config, Socket.IO setup
+  - `controllers/foodController.js` — addFood, claimFood, updateClaimedStatus
+  - `models/Notification.js` — persisted notifications with TTL
+  - `routes/foodRoutes.js` — REST endpoints under `/api/food`
 
-If you get `EAUTH` / `535 Bad credentials`, create a Gmail App Password or switch to SendGrid/Mailgun.
+- Frontend
+  - `src/components/VolunteerNotifications.jsx` — realtime client + notification panel
+  - `src/page/VolunteerDashboard.jsx` — volunteer dashboard
+  - `src/page/VolunteerTasks.jsx` — volunteer task list and status updates
+  - `src/components/Navbar.jsx` — shows volunteer bell badge and role-aware links
+
+## Testing SMTP
+
+If you rely on email (password resets, notifications), test SMTP locally using `Backend/test-smtp.js`. Gmail commonly returns EAUTH/535 unless you use an App Password or a transactional provider (SendGrid, Mailgun, SES). For production use a provider — do not rely on plain Gmail credentials.
 
 ## Troubleshooting
 
-- CORS errors: ensure `ALLOWED_ORIGINS` in `Backend/.env` contains the frontend origin. Also restart the backend after changes.
-- MongoDB connection failed: check `MONGO_URI` and network/Atlas IP whitelist.
-- SMTP auth error (`EAUTH`): use app passwords or provider API key. See Testing SMTP above.
-- `ReferenceError: module is not defined` in Vite: caused by CommonJS code in frontend files. Convert to ES modules (`export default ...`) — example: `src/components/FAQ.jsx` was updated.
+- Socket.IO connection errors (browser shows ws://... interrupted):
+  1. Confirm backend is running (`npm start` in Backend) and listening on the expected port.
+ 2. Check backend logs for startup errors (missing env vars, DB connection failure). We added an early env check in `server.js` that will exit with a helpful message if `MONGO_URI` or `JWT_SECRET` is missing.
+ 3. Ensure frontend `VITE_REACT_APP_API` points to the backend base URL and that the Socket.IO client is using the same origin.
 
-## Developer notes & recent changes
+- Backend exit code 1 on start: inspect console — common causes: missing `MONGO_URI`, DB connection failure, or port already in use.
 
-I made UI improvements and added a small theme system and reusable components for a cleaner, modern look (useful files):
+- CORS errors: set `ALLOWED_ORIGINS` in `Backend/.env` (comma-separated) to include your frontend origin (e.g. http://localhost:5173). The server allows localhost variants by default in development.
 
-- `Frontend/src/styles/theme.css` — theme variables and utilities
-- `Frontend/src/components/UI/Card.jsx` — small reusable Card
-- Updated components:
-  - `Frontend/src/components/Navbar.jsx`
-  - `Frontend/src/components/Hero.jsx`
-  - `Frontend/src/components/Footer.jsx`
-  - `Frontend/src/page/AvailableFood.jsx`
-  - `Frontend/src/page/Donate.jsx`
-  - `Frontend/src/components/FAQ.jsx` (fixed to be an ES module component)
+- SMTP EAUTH 535: use an App Password for Gmail or a transactional email provider.
 
-Backend improvements made during recent work:
+## Quick verification checklist
 
-- `server.js` — CORS now supports an `ALLOWED_ORIGINS` env var and includes localhost for dev.
-- `Backend/test-smtp.js` — helper script to verify SMTP credentials.
+1. Start MongoDB (or ensure Atlas is accessible).
+2. Start backend: `cd Backend && npm start`. Confirm `Server running on port` message.
+3. Start frontend: `cd Frontend && npm run dev`.
+4. Open the app, sign up as a donor and create a donation. Open another browser/session as a volunteer and verify the notification appears and can be claimed.
 
-## Security notes
+## Recommended next steps / improvements
 
-- Never commit `Backend/.env` or other secret files. `.gitignore` includes `.env` but double-check before pushing.
-- Rotate credentials immediately if they were committed to a public repo (DB user password, Google API key, email password).
+- Harden Socket.IO authentication: currently the server accepts connections and tries to verify the handshake token but does not fully enforce role-based disconnects — consider rejecting unauthenticated sockets during handshake.
+- Geofencing: replace crude `area:` room logic with geohash or spatial queries (MongoDB geospatial index) to deliver notifications only to nearby volunteers.
+- Per-volunteer read/unread: store a per-user read state for Notifications so missed items are not re-shown after a volunteer has already dismissed them.
+- Tests: add unit/integration tests for critical endpoints (claim flow, status updates).
 
-## Suggested next steps
+## Contributing
 
-- Replace Nodemailer + Gmail with a transactional provider (SendGrid / Mailgun) for production reliability.
-- Add automated tests (Jest / supertest) for backend routes.
-- Add CI (GitHub Actions) to run linting and tests on PRs.
-- Create a `LICENSE` file and choose a license for the repository (MIT is common for open-source).
-
----
-
-If you'd like, I can:
-
-- Add a `LICENSE` file (MIT) and update package.json
-- Create a `DEVELOPMENT.md` with more detailed contributor setup
-- Convert the entire UI to a design system (Tailwind config or CSS variables) and restyle all pages consistently
-
-Tell me which follow-ups you want and I will apply them.
-# React + Vite
-
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
-
-Currently, two official plugins are available:
-
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react/README.md) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend using TypeScript and enable type-aware lint rules. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+If you want me to apply changes (theme, accessibility pass, geofencing support, or tests), tell me which area to prioritize and I will create focused patches.

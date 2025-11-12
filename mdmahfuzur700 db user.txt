@@ -1,0 +1,12 @@
+MONGO_URI="mongodb+srv://mdmahfuzur700_db_user:RGtb3kXkNVvqUqZo@cluster0.lewkqrh.mongodb.net/?appName=Cluster0"
+JWT_SECRET=62819e4cb8e2283653a5fa775eadaaf5dc7a0a0512b99b9711555d8123fa762afd58fa7bd1cff301b5d12882c6d15aa24cfd46eb420a439a5bf71878d5221190
+GOOGLE_MAPS_API_KEY= AIzaSyC4Ayw8ECyBRs-UhGwiSP_kNdPwZd1RcDU
+EMAIL_USER= mdmahfuzur700@gmail.com
+EMAIL_PASS= jwifxkxwerpnyowi
+PORT=5000
+
+
+mdmahfuzur700_db_user
+RGtb3kXkNVvqUqZo
+
+

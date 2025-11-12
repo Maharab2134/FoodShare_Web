@@ -23,7 +23,7 @@ export default function Login() {
 
   const handleLogin = async (e) => {
     e.preventDefault(); // Prevent form from reloading
-  
+
     try {
       const response = await fetch(`${API}/api/auth/login`, {
         method: "POST",
@@ -32,18 +32,23 @@ export default function Login() {
         },
         body: JSON.stringify({ email, password }),
       });
-  
+
       const data = await response.json();
-  
+
       if (response.ok) {
         // Store only "auth" in localStorage
         localStorage.setItem("auth", JSON.stringify(data));
-  
+
         // Dispatch Redux action (ensure this does NOT store "user" separately)
         dispatch(loginSuccess(data));
-  
+
         toast.success("Login successful!");
-        navigate("/");
+        // If volunteer, navigate to volunteer dashboard
+        if (data?.user?.role === "volunteer") {
+          navigate("/volunteer");
+        } else {
+          navigate("/");
+        }
       } else {
         toast.error(data.message || "Login failed");
       }
@@ -51,9 +56,6 @@ export default function Login() {
       toast.error("Something went wrong, try again!");
     }
   };
-  
-  
-  
 
   const handleLogout = () => {
     localStorage.removeItem("auth");
@@ -63,7 +65,6 @@ export default function Login() {
       window.location.reload();
     }, 1500);
   };
-  
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-900 px-4">
@@ -98,7 +99,9 @@ export default function Login() {
               />
             </div>
 
-            {error && <p className="text-red-500 text-sm text-center">{error}</p>}
+            {error && (
+              <p className="text-red-500 text-sm text-center">{error}</p>
+            )}
 
             <button
               type="submit"
@@ -120,22 +123,24 @@ export default function Login() {
 
         {!user && (
           <>
-          <div>
-          <p className="text-gray-400 text-center mt-4">
-            Don't have an account?{" "}
-            <a href="/signup" className="text-indigo-500 hover:underline">
-              Sign up
-            </a>
-          </p>
-          </div>
-          <div>
-          <p className="text-gray-400 text-center mt-4">
-            
-            <a href="/forgotpassword" className="text-indigo-500 hover:underline">
-             Forgot Password
-            </a>
-          </p>
-          </div>
+            <div>
+              <p className="text-gray-400 text-center mt-4">
+                Don't have an account?{" "}
+                <a href="/signup" className="text-indigo-500 hover:underline">
+                  Sign up
+                </a>
+              </p>
+            </div>
+            <div>
+              <p className="text-gray-400 text-center mt-4">
+                <a
+                  href="/forgotpassword"
+                  className="text-indigo-500 hover:underline"
+                >
+                  Forgot Password
+                </a>
+              </p>
+            </div>
           </>
         )}
       </div>

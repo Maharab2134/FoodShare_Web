@@ -9,7 +9,6 @@ const EditProfile = () => {
   const dispatch = useDispatch();
   const user = useSelector((state) => state.auth.user);
 
- 
   const API = import.meta.env.VITE_REACT_APP_API;
   // Profile State
   const [profile, setProfile] = useState({
@@ -30,8 +29,10 @@ const EditProfile = () => {
       return;
     }
 
+    // Only allow the owner of this profile to edit it.
+    // If the current user does not match the email in the URL, redirect back to the profile page.
     if (user?.email !== email) {
-      navigate("/unauthorized");
+      navigate(`/profile/${email}`);
       return;
     }
 

@@ -38,6 +38,46 @@ exports.addFood = async (req, res) => {
     await User.findByIdAndUpdate(req.user.userId, {
       $push: { donated: { foodItemId: food._id } },
     });
+    // Persist a notification for reconnecting volunteers and emit realtime event
+    try {
+      const io = req.app && req.app.locals && req.app.locals.io;
+      const Notification = require("../models/Notification");
+      const payload = {
+        id: food._id,
+        name: food.name,
+        title: `New donation: ${food.name}`,
+        category: food.category,
+        quantity: food.quantity,
+        location: food.location,
+        latitude: food.latitude,
+        longitude: food.longitude,
+        donorName: food.donorName,
+        donorContactNo: food.donorContactNo,
+      };
+
+      // Save to notifications (will expire automatically via TTL)
+      try {
+        await Notification.create({
+          title: payload.title,
+          name: payload.name,
+          foodId: food._id,
+          category: payload.category,
+          quantity: payload.quantity,
+          location: payload.location,
+          image: food.image,
+          donorId: food.donorDetails,
+          extra: { donorContactNo: food.donorContactNo },
+        });
+      } catch (nerr) {
+        console.error("Failed to save notification:", nerr.message);
+      }
+
+      if (io) {
+        io.emit("new_donation", payload);
+      }
+    } catch (err) {
+      console.error("Failed to emit new_donation", err);
+    }
 
     res.status(201).json({ message: "Food added successfully" });
   } catch (error) {
@@ -86,44 +126,56 @@ exports.getAvailableFood = async (req, res) => {
 exports.claimFood = async (req, res) => {
   const { id } = req.params;
   try {
-    const food = await Food.findById(id);
-    if (!food) return res.status(404).json({ message: "Food item not found" });
-    const user = await User.findById(req.user.userId);
+    // Atomic update: only claim if status is still 'Available'
+    const updated = await Food.findOneAndUpdate(
+      { _id: id, status: "Available" },
+      {
+        $set: {
+          status: "Claimed",
+          claimedBy: req.user.userId,
+          claimedAt: new Date(),
+        },
+      },
+      { new: true }
+    );
 
-    console.log(user.name);
+    if (!updated) {
+      return res.status(409).json({
+        message: "This donation has already been claimed by someone else.",
+      });
+    }
+
+    const user = await User.findById(req.user.userId);
     const claimerEmail = user.email;
     const claimerName = user.name;
-
     const claimerPhone = user.phone;
     const claimerAddress = user.address;
 
     const claimedFood = new claimed({
-      name: food.name,
-      category: food.category,
-      quantity: food.quantity,
-      location: food.location,
-      image: food.image,
-      donorDetails: food.donorDetails,
-      donorName: food.donorName,
-      donorContactNo: food.donorContactNo,
-      latitude: food.latitude,
-      longitude: food.longitude,
+      name: updated.name,
+      category: updated.category,
+      quantity: updated.quantity,
+      location: updated.location,
+      image: updated.image,
+      donorDetails: updated.donorDetails,
+      donorName: updated.donorName,
+      donorContactNo: updated.donorContactNo,
+      latitude: updated.latitude,
+      longitude: updated.longitude,
       emailid: claimerEmail, // Store claimer's email
       claimerName: claimerName,
       status: "Claimed",
-
       claimedAt: new Date(),
     });
 
-    await claimedFood.save(); // Save to ClaimedFood collection
-    await Food.findByIdAndDelete(id); // Remove from AvailableFood collection
+    await claimedFood.save();
+    await Food.findByIdAndDelete(id);
 
-    // 🔥 Update matching DonatedFood record (same food name + donor ID + status still "Donated")
+    // Update DonatedFood record if present
     await DonatedFood.findOneAndUpdate(
       {
-        name: food.name,
-
-        donorDetails: food.donorDetails,
+        name: updated.name,
+        donorDetails: updated.donorDetails,
         status: "Donated",
       },
       {
@@ -131,7 +183,7 @@ exports.claimFood = async (req, res) => {
           status: "Claimed",
           claimerName: claimerName,
           claimedAt: new Date(),
-          claimerEmail: claimerEmail, // Add this field to your schema if you want
+          claimerEmail: claimerEmail,
         },
       }
     );
@@ -146,10 +198,10 @@ exports.claimFood = async (req, res) => {
 
     const mailOptions = {
       from: `"Food Share App" <${process.env.EMAIL_USER}>`,
-      to: food.emailid,
+      to: updated.emailid,
       subject: "Your food has been claimed!",
       html: `
-        <h3>Food Claimed: ${food.name}</h3>
+        <h3>Food Claimed: ${updated.name}</h3>
         <p><strong>Claimer Name:</strong> ${claimerName}</p>
         <p><strong>Email:</strong> ${claimerEmail}</p>
         <p><strong>Phone:</strong> ${claimerPhone}</p>
@@ -168,6 +220,27 @@ exports.claimFood = async (req, res) => {
       // Log email error but don't fail the entire claim operation.
       emailError = emailErr;
       console.error("❌ Failed to send email:", emailErr);
+    }
+
+    // Emit event to notify volunteers the donation was claimed
+    try {
+      const io = req.app && req.app.locals && req.app.locals.io;
+      if (io) {
+        io.emit("donation_claimed", { id, claimerName, claimerEmail });
+      }
+    } catch (err) {
+      console.error("Failed to emit donation_claimed", err);
+    }
+
+    // Remove any persisted notification for this food so reconnecting volunteers won't see it
+    try {
+      const Notification = require("../models/Notification");
+      await Notification.deleteMany({ foodId: id });
+    } catch (nerr) {
+      console.error(
+        "Failed to remove notification for claimed food:",
+        nerr.message
+      );
     }
 
     // Always return success for the claim operation; include email error details when available.
@@ -199,5 +272,76 @@ exports.getDonatedFood = async (req, res) => {
     res.json(donatedFood); // Send donated food as response
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+};
+
+// Update status for a claimed food (picked up / in_transit / delivered)
+exports.updateClaimedStatus = async (req, res) => {
+  try {
+    const { id } = req.params; // id of ClaimedFood document
+    const { status } = req.body; // expected values: 'PickedUp', 'InTransit', 'Delivered'
+
+    if (!status) {
+      return res.status(400).json({ message: "Status is required." });
+    }
+
+    // Find the claimed item
+    const claimedItem = await ClaimedFood.findById(id);
+    if (!claimedItem) {
+      return res.status(404).json({ message: "Claimed item not found." });
+    }
+
+    // Only the claimer (volunteer) or admin should be able to update
+    if (
+      String(claimedItem.claimedBy || "") !== String(req.user.userId) &&
+      req.user.role !== "admin"
+    ) {
+      // Allow if request user email matches claimer email (fallback)
+      if (claimedItem.emailid !== req.user.email) {
+        return res
+          .status(403)
+          .json({ message: "Not authorized to update status." });
+      }
+    }
+
+    // Update fields based on status
+    const prevStatus = claimedItem.status;
+    claimedItem.status = status;
+    if (status === "PickedUp") claimedItem.pickedUpAt = new Date();
+    if (status === "InTransit") claimedItem.inTransitAt = new Date();
+    if (status === "Delivered") claimedItem.deliveredAt = new Date();
+
+    await claimedItem.save();
+
+    // Keep DonatedFood in sync if present
+    try {
+      await DonatedFood.findOneAndUpdate(
+        { donorDetails: claimedItem.donorDetails, name: claimedItem.name },
+        { $set: { status: status } }
+      );
+    } catch (err) {
+      // non-fatal
+      console.error("Failed to update DonatedFood status", err);
+    }
+
+    // Emit socket event about status change
+    try {
+      const io = req.app && req.app.locals && req.app.locals.io;
+      if (io) {
+        io.emit("status_update", {
+          id: claimedItem._id,
+          status,
+          claimerName: claimedItem.claimerName,
+          claimerEmail: claimedItem.emailid,
+        });
+      }
+    } catch (err) {
+      console.error("Failed to emit status_update", err);
+    }
+
+    res.json({ message: "Status updated", status, prevStatus });
+  } catch (error) {
+    console.error("updateClaimedStatus error", error);
+    res.status(500).json({ message: "Server error", error: error.message });
   }
 };

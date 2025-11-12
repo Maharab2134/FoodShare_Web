@@ -3,11 +3,10 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 require("dotenv").config(); // Ensure dotenv is used to load environment variables
 
-
 // Register Function
 exports.register = async (req, res) => {
   try {
-    const { name, email, password, address, phone } = req.body;
+    const { name, email, password, address, phone, role } = req.body;
     const file = req.file;
 
     // DEBUG: Check fields
@@ -16,7 +15,9 @@ exports.register = async (req, res) => {
 
     // Validate required fields
     if (!name || !email || !password || !address || !phone) {
-      return res.status(400).json({ message: "All required fields must be filled." });
+      return res
+        .status(400)
+        .json({ message: "All required fields must be filled." });
     }
 
     // Check if user already exists
@@ -31,7 +32,7 @@ exports.register = async (req, res) => {
     // Save image path if uploaded
     const imagePath = file ? `/uploads/${file.filename}` : "";
 
-    // Create new user
+    // Create new user (allow role only when explicitly set to volunteer for safety)
     const user = new User({
       name,
       email,
@@ -39,17 +40,35 @@ exports.register = async (req, res) => {
       address,
       phone,
       image: imagePath,
+      role: role === "volunteer" ? "volunteer" : "user",
     });
 
     await user.save();
 
-    res.status(201).json({ message: "User registered successfully" });
+    // Create JWT token including role
+    const token = jwt.sign(
+      { userId: user._id, name: user.name, email: user.email, role: user.role },
+      process.env.JWT_SECRET,
+      { expiresIn: "1d" }
+    );
+
+    res.status(201).json({
+      message: "User registered successfully",
+      token,
+      user: {
+        name: user.name,
+        email: user.email,
+        phone: user.phone,
+        address: user.address,
+        image: user.image || "",
+        role: user.role || "user",
+      },
+    });
   } catch (error) {
     console.error("Register Error:", error.message);
     res.status(500).json({ error: "Server Error: " + error.message });
   }
 };
-
 
 // Login Function
 exports.login = async (req, res) => {
@@ -58,7 +77,9 @@ exports.login = async (req, res) => {
 
     // Basic validation
     if (!email || !password) {
-      return res.status(400).json({ message: "Email and password are required." });
+      return res
+        .status(400)
+        .json({ message: "Email and password are required." });
     }
 
     const user = await User.findOne({ email });
@@ -75,7 +96,7 @@ exports.login = async (req, res) => {
     }
 
     const token = jwt.sign(
-      { userId: user._id, name: user.name, email: user.email },
+      { userId: user._id, name: user.name, email: user.email, role: user.role },
       process.env.JWT_SECRET,
       { expiresIn: "1d" }
     );
@@ -87,7 +108,8 @@ exports.login = async (req, res) => {
         email: user.email,
         phone: user.phone,
         address: user.address,
-        image: user.image || "", // fallback to empty string
+        image: user.image || "",
+        role: user.role || "user",
       },
     });
   } catch (error) {

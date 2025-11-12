@@ -34,18 +34,23 @@ const claimFoodSchema = new mongoose.Schema(
     donorContactNo: { type: String, required: false },
     status: {
       type: String,
-      
+      enum: ["Claimed", "PickedUp", "InTransit", "Delivered"],
       default: "Claimed",
     },
     claimedBy: { type: mongoose.Schema.Types.ObjectId, ref: "Users" },
     claimedAt: { type: Date },
-    latitude: {type:String},
-    longitude: {type:String},
+    claimerName: { type: String },
+    claimerEmail: { type: String },
+    pickedUpAt: { type: Date },
+    inTransitAt: { type: Date },
+    deliveredAt: { type: Date },
+    latitude: { type: String },
+    longitude: { type: String },
     emailid: {
-      type:String
-   }
+      type: String,
+    },
   },
-  
+
   { timestamps: true }
 );
 
